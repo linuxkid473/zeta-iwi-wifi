@@ -46,7 +46,7 @@ Verified on real hardware: **Dell Inspiron 510m, Intel PRO/Wireless 2200BG (PCI 
 Throughput has not been benchmarked. The driver is polled (no interrupts) and the cryptography is plain C on a
 1.6 GHz Pentium M — fine for browsing and file transfers, not a speed demon.
 
-**Download** (source + docs as a ZIP, for transferring to a ZETA machine without Git): <https://thebeosarchive.de/downloads/Drivers/zeta-iwi-wifi-0.1.0.zip>
+**Download** (source + docs as a ZIP, for transferring to a ZETA machine without Git): <https://thebeosarchive.de/downloads/Drivers/zeta-iwi-wifi-0.2.0.zip>
 
 ## Quick start (on the ZETA machine)
 
