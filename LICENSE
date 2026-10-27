@@ -1,0 +1,25 @@
+ISC License
+
+Copyright (c) 2026 Vihaan Nathan
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+----------------------------------------------------------------------------
+Portions of src/kernel/iwi.c (register offsets, firmware load sequence,
+descriptor and command layouts) follow the OpenBSD if_iwi.c / if_iwireg.h
+driver:
+
+Copyright (c) 2004-2008
+     Damien Bergamini <damien.bergamini@free.fr>. All rights reserved.
+
+which is distributed under the same ISC terms as above.

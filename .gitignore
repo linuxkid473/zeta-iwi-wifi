@@ -1,0 +1,17 @@
+# Intel's firmware is NOT redistributable: never commit it
+iwi-bss
+iwi-ibss
+iwi-monitor
+*.fw
+fw-private/
+iwi-firmware*
+# personal configuration (holds the Wi-Fi password)
+iwi.conf
+# build products
+iwi
+iwi.o
+iwid
+ethtest
+test_wpa
+*.o
+*.zip

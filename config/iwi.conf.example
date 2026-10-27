@@ -1,0 +1,14 @@
+# /boot/home/config/settings/iwi.conf  -  read by iwid
+# Copy this file there and edit it.  Keep it private: it holds your Wi-Fi password in plain text.
+#
+# The name of your network (case sensitive, must be a WPA2-PSK / CCMP network).
+ssid=YOUR_NETWORK_NAME
+#
+# The Wi-Fi password, 8 to 63 characters.  Everything after "psk=" to the end of the line is used (spaces allowed).
+psk=YOUR_WIFI_PASSWORD
+#
+# Optional: where the Intel firmware file is (default /boot/home/ZetaWifi/iwi-bss)
+#fw=/boot/home/ZetaWifi/iwi-bss
+#
+# Optional: address used by the one-shot ARP self test (default 192.168.0.1). Not needed in bridge mode (-b).
+#gw=192.168.0.1
