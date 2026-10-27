@@ -12,12 +12,12 @@
 4. **WPA (TKIP) and WEP**, **open networks** — the firmware supports them; the daemon only implements WPA2/CCMP. Open networks are easy
    (skip the handshake, no encryption); TKIP needs the Michael MIC and RC4 key mixing.
 5. **Receive replay protection** and **PTK rekey** (see [12-security.md](12-security.md)).
-6. **Several networks / roaming / SSID list.** The config holds one SSID. A list with priorities and a "connect to the best known one"
-   rule would be natural.
+6. **Roaming and network priorities.** Several saved networks are supported (the strongest one in range wins; the panel can force one), but there is no
+   roaming between access points of one network while connected, and no explicit priority order.
 7. **Interrupt-driven operation.** The driver polls (~1.5 ms in the daemon). An interrupt handler + a blocking `read()` would cut the idle
    CPU cost to near zero. The main risk is the shared IRQ line; the firmware must be acknowledged correctly.
-8. **A proper UI.** A Deskbar replicant / preference panel to pick a network and show signal strength. The daemon already knows everything
-   (signal per AP, current link state); it just does not publish it anywhere. A tiny status file or a BMessage port would be enough.
+8. **More UI.** The Wi-Fi panel exists (see [14-wifi-panel.md](14-wifi-panel.md)); still missing: a Deskbar replicant with a signal icon, and a live
+   scan without the 1.6 s card restart (needs the firmware's background-scan rules, see the debugging story).
 9. **Integration with ZETA's Network preferences** (so the interface shows up as a normal profile) instead of the daemon configuring
    it with `ifconfig`/`route`.
 10. **Power saving** (`SET_POWER_MODE` ≠ CAM) for battery life.

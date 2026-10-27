@@ -236,36 +236,65 @@ tx_frame(const u8* frame, int len)
 
 /* ------------------------------ configuration file ------------------------------ */
 
-static char gSsid[64], gPsk[128], gFwPath[256] = DEFAULT_FW, gGw[32] = "192.168.0.1";
+#define MAX_NETS	8
 
+typedef struct {
+	char ssid[64];
+	char psk[128];
+	u8 pmk[32];
+	int have_pmk;
+} net_t;
+
+static net_t gNets[MAX_NETS];
+static int gNumNets = 0;
+static char gSsid[64];			/* the network we are currently trying / connected to */
+static char gPrefer[64];		/* a network the panel asked for: tried first */
+static char gFwPath[256] = DEFAULT_FW, gGw[32] = "192.168.0.1";
+
+/* Each "ssid=" line starts a new saved network, the "psk=" line after it belongs to it.  A file with no usable
+   network is not an error: the daemon still runs, scans, and waits for the panel to add one. */
 static int
 read_config(const char* path)
 {
 	FILE* f = fopen(path, "r");
 	char line[256];
+	int i, k;
 
+	gNumNets = 0;
 	if (f == NULL) {
-		printf("cannot open %s\n", path);
-		return -1;
+		say("no configuration file %s yet", path);
+		return 0;
 	}
 	while (fgets(line, sizeof(line), f)) {
 		int n = (int)strlen(line);
 		while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
 			line[--n] = '\0';
-		if (strncmp(line, "ssid=", 5) == 0)
-			strncpy(gSsid, line + 5, sizeof(gSsid) - 1);
-		else if (strncmp(line, "psk=", 4) == 0)
-			strncpy(gPsk, line + 4, sizeof(gPsk) - 1);
-		else if (strncmp(line, "fw=", 3) == 0)
+		if (strncmp(line, "ssid=", 5) == 0) {
+			if (gNumNets < MAX_NETS) {
+				memset(&gNets[gNumNets], 0, sizeof(net_t));
+				strncpy(gNets[gNumNets].ssid, line + 5, sizeof(gNets[0].ssid) - 1);
+				gNumNets++;
+			}
+		} else if (strncmp(line, "psk=", 4) == 0) {
+			if (gNumNets > 0)
+				strncpy(gNets[gNumNets - 1].psk, line + 4, sizeof(gNets[0].psk) - 1);
+		} else if (strncmp(line, "fw=", 3) == 0)
 			strncpy(gFwPath, line + 3, sizeof(gFwPath) - 1);
 		else if (strncmp(line, "gw=", 3) == 0)
 			strncpy(gGw, line + 3, sizeof(gGw) - 1);
 	}
 	fclose(f);
-	if (gSsid[0] == '\0' || strlen(gPsk) < 8 || strlen(gPsk) > 63) {
-		printf("%s needs  ssid=...  and  psk=...  (8 to 63 characters)\n", path);
-		return -1;
+	/* drop incomplete entries (no passphrase of 8..63 characters) */
+	for (i = 0, k = 0; i < gNumNets; i++) {
+		if (gNets[i].ssid[0] != '\0' && strlen(gNets[i].psk) >= 8 && strlen(gNets[i].psk) <= 63) {
+			if (k != i)
+				gNets[k] = gNets[i];
+			k++;
+		} else
+			say("ignoring saved network '%s': it needs a password of 8 to 63 characters", gNets[i].ssid);
 	}
+	gNumNets = k;
+	say("%d saved network%s", gNumNets, gNumNets == 1 ? "" : "s");
 	return 0;
 }
 
@@ -363,13 +392,15 @@ note_beacon(const u8* item, int n)
 		if (ie[0] == 0) {
 			ssidlen = ie[1] > 32 ? 32 : ie[1];
 			for (i = 0; i < ssidlen; i++)
-				a->ssid[i] = ie[2 + i];
+				a->ssid[i] = (ie[2 + i] < 32 || ie[2 + i] == 127 || ie[2 + i] == '|') ? '?' : ie[2 + i];
 			a->ssid[ssidlen] = '\0';
 		} else if (ie[0] == 3 && ie[1] >= 1) {
 			a->chan = ie[2];
 		} else if (ie[0] == 1 || ie[0] == 50) {
 			for (i = 0; i < ie[1] && a->nrates < 16; i++)
 				a->rates[a->nrates++] = ie[2 + i];
+		} else if (ie[0] == 221 && ie[1] >= 4 && ie[2] == 0x00 && ie[3] == 0x50 && ie[4] == 0xf2 && ie[5] == 0x01) {
+			a->wpa1 = 1;
 		} else if (ie[0] == 48 && ie[1] <= 62) {
 			memcpy(a->rsn, ie, 2 + ie[1]);
 			a->rsnlen = 2 + ie[1];
@@ -1304,6 +1335,123 @@ self_ping(const u8* target)
 	say("self ping done: %d of 4 answered", got);
 }
 
+
+/* ------------------------------ panel interface: status file, scan file, command file ------------------------------ */
+
+#define STATUS_FILE	"/tmp/iwid.status"
+#define SCAN_FILE	"/tmp/iwid.scan"
+#define CMD_FILE	"/tmp/iwid.cmd"
+
+#define PCMD_NONE	0
+#define PCMD_SCAN	1
+#define PCMD_RELOAD	2
+
+static int gCurDbm = -100;		/* smoothed signal of the access point we are talking to (dBm) */
+static int gCurChan = 0;
+static int gLinked = 0;			/* 1 once we are associated, handshaken and (normally) have an address */
+
+/* The panel (or anyone) reads these small text files; they are written to a temp file and renamed, so a reader
+   never sees a half-written one. */
+static void
+write_status(const char* state, const char* error)
+{
+	FILE* f = fopen(STATUS_FILE ".tmp", "w");
+	char bssid[20];
+
+	if (f == NULL)
+		return;
+	mac_str(gBssid, bssid);
+	fprintf(f, "state=%s\n", state);
+	fprintf(f, "error=%s\n", error ? error : "");
+	fprintf(f, "ssid=%s\n", gLinked ? gSsid : "");
+	fprintf(f, "bssid=%s\n", gLinked ? bssid : "");
+	fprintf(f, "chan=%d\n", gLinked ? gCurChan : 0);
+	fprintf(f, "dbm=%d\n", gLinked ? gCurDbm : 0);
+	if (gLinked && gLease) {
+		fprintf(f, "ip=%d.%d.%d.%d\n", gIp[0], gIp[1], gIp[2], gIp[3]);
+		fprintf(f, "router=%d.%d.%d.%d\n", gRouter[0], gRouter[1], gRouter[2], gRouter[3]);
+		fprintf(f, "dns=%d.%d.%d.%d\n", gDns[0], gDns[1], gDns[2], gDns[3]);
+	} else {
+		fprintf(f, "ip=\nrouter=\ndns=\n");
+	}
+	fprintf(f, "networks=%d\n", gNumNets);
+	fprintf(f, "updated=%ld\n", (long)(system_time() / 1000000));
+	fclose(f);
+	rename(STATUS_FILE ".tmp", STATUS_FILE);
+}
+
+/* one line per access point: channel|dBm|security|bssid|ssid   (security: 0 open, 1 WEP, 2 WPA, 3 WPA2) */
+static void
+write_scan_file(void)
+{
+	FILE* f = fopen(SCAN_FILE ".tmp", "w");
+	char b[20];
+	int i, sec;
+
+	if (f == NULL)
+		return;
+	for (i = 0; i < gNumAp; i++) {
+		sec = gAp[i].rsnlen ? 3 : (gAp[i].wpa1 ? 2 : ((gAp[i].capinfo & 0x10) ? 1 : 0));
+		mac_str(gAp[i].bssid, b);
+		fprintf(f, "%d|%d|%d|%s|%s\n", gAp[i].chan, gAp[i].rssi - 112, sec, b, gAp[i].ssid);
+	}
+	fclose(f);
+	rename(SCAN_FILE ".tmp", SCAN_FILE);
+}
+
+/* The panel drops a one-line file /tmp/iwid.cmd:   scan   |   reload   |   connect <ssid>
+   `connect` makes that saved network the first one to try, then behaves like `reload`. */
+static int
+poll_cmd(void)
+{
+	FILE* f;
+	char line[128];
+	int n;
+
+	f = fopen(CMD_FILE, "r");
+	if (f == NULL)
+		return PCMD_NONE;
+	line[0] = '\0';
+	if (fgets(line, sizeof(line), f) == NULL)
+		line[0] = '\0';
+	fclose(f);
+	remove(CMD_FILE);
+	n = (int)strlen(line);
+	while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+		line[--n] = '\0';
+	if (strcmp(line, "scan") == 0)
+		return PCMD_SCAN;
+	if (strcmp(line, "reload") == 0)
+		return PCMD_RELOAD;
+	if (strncmp(line, "connect ", 8) == 0) {
+		strncpy(gPrefer, line + 8, sizeof(gPrefer) - 1);
+		gPrefer[sizeof(gPrefer) - 1] = '\0';
+		return PCMD_RELOAD;
+	}
+	say("ignoring unknown panel command '%s'", line);
+	return PCMD_NONE;
+}
+
+/* sleep for `ms` while serving panel commands; returns 1 if a reload/connect was requested */
+static int
+wait_with_commands(int ms)
+{
+	bigtime_t t0 = system_time();
+	int c;
+
+	while (system_time() - t0 < (bigtime_t)ms * 1000) {
+		c = poll_cmd();
+		if (c == PCMD_RELOAD)
+			return 1;
+		if (c == PCMD_SCAN) {
+			scan_for_aps();
+			write_scan_file();
+		}
+		snooze(250000);
+	}
+	return 0;
+}
+
 /* ------------------------------ bridge: network stack <-> encrypted air ------------------------------ */
 
 /* run until the link is lost; returns when the caller should reconnect */
@@ -1317,15 +1465,37 @@ bridge(void)
 	bigtime_t lastreport = system_time();
 	bigtime_t lastping = system_time();
 	bigtime_t lastitem = system_time();
+	bigtime_t laststatus = 0, lastcmd = 0;
 
 	if (dhcp_acquire() == 0) {
 		apply_address();
 		if (gSelfPing)
 			self_ping(gRouter);
 	}
+	gLinked = 1;
+	write_status("connected", gLease ? "" : "no address: DHCP did not answer");
 	say("bridge running: /dev/net/iwi/0 is live");
 	for (;;) {
 		busy = 0;
+		if (system_time() - laststatus > 2000000) {
+			write_status("connected", gLease ? "" : "no address: DHCP did not answer");
+			laststatus = system_time();
+		}
+		if (system_time() - lastcmd > 1000000) {
+			int c = poll_cmd();
+
+			lastcmd = system_time();
+			if (c == PCMD_RELOAD) {
+				say("panel asked to reconnect / reload the saved networks");
+				return -3;
+			}
+			if (c == PCMD_SCAN) {
+				/* A SCAN command while associated crashes the card's firmware (SYSASSERT, see the debugging story),
+				   so a rescan is a deliberate restart of the card: a few seconds offline, then a fresh scan. */
+				say("panel asked for a scan: restarting the card to scan safely");
+				return -4;
+			}
+		}
 		if (system_time() - lastitem > 10000000) {
 			/* a healthy card sends a notification every fraction of a second; 10 s of silence means it is dead */
 			say("the card has been silent for 10 s: restarting it");
@@ -1343,6 +1513,11 @@ bridge(void)
 			busy = 1;
 			lastitem = system_time();
 			if (item[0] == ITEM_FRAME) {
+				if (n > 28 && ((item + 28)[0] & 0x0c) == 0x08) {
+					int d = (int)item[17] - 112;
+
+					gCurDbm = (gCurDbm == -100) ? d : (gCurDbm * 3 + d) / 4;
+				}
 				m = rx_to_ethernet(item, n, eth);
 				if (m > 0 && memcmp(eth + 6, gMac, 6) != 0) {
 					if (eth[12] == 0x88 && eth[13] == 0x8e) {
@@ -1533,7 +1708,8 @@ usage(void)
 		"  -e       with -b: answer ICMP echo requests ourselves (debugging aid)\n"
 		"  -i       connect, then idle for 40 s and watch the card (finds firmware crashes)\n"
 		"  without -b: connect once, send an ARP probe to the gateway and exit (smoke test)\n"
-		"config: %s  (ssid=  psk=  [gw=]  [fw=])\n", CONF_PATH);
+		"config: %s  (pairs of ssid= / psk= lines, one pair per saved network; optional gw=, fw=)\n"
+		"panel interface: /tmp/iwid.status, /tmp/iwid.scan (written), /tmp/iwid.cmd (read: scan | reload | connect <ssid>)\n", CONF_PATH);
 }
 
 /* ------------------------------ main ------------------------------ */
@@ -1585,49 +1761,103 @@ report_card(const char* why)
 	}
 }
 
-/* scan, pick the strongest access point with our SSID, associate and run the handshake */
+
+/* 1 if the card's firmware has reported a fatal error since the last start */
+static int
+card_has_crashed(void)
+{
+	struct iwi_status st;
+
+	memset(&st, 0, sizeof(st));
+	if (ioctl(gFd, IWI_IOC_STATUS, &st, sizeof(st)) < 0)
+		return 0;
+	return (st.v[0] & 0x40000000) != 0;
+}
+
+/* scan, pick an access point of a saved network (the one the panel asked for first, then the strongest),
+   associate and run the handshake */
 static int
 connect_once(void)
 {
-	u8 order[MAX_AP];
-	int i, j, n, ncand = 0;
+	u8 order[MAX_AP], netof[MAX_AP];
+	int i, j, k, n, ncand = 0, wrongpw = 0, r;
 	char b[20];
 
+	gLinked = 0;
+	write_status("scanning", "");
 	n = scan_for_aps();
 	say("scan: %d access points", n);
+	write_scan_file();
 	for (i = 0; i < gNumAp; i++) {
-		if (strcmp(gAp[i].ssid, gSsid) == 0 && gAp[i].rsnlen)
-			order[ncand++] = i;
+		if (!gAp[i].rsnlen)
+			continue;
+		for (k = 0; k < gNumNets; k++) {
+			if (strcmp(gAp[i].ssid, gNets[k].ssid) == 0)
+				break;
+		}
+		if (k < gNumNets) {
+			order[ncand] = i;
+			netof[ncand] = k;
+			ncand++;
+		}
 	}
 	if (ncand == 0) {
-		say("no access point called '%s' with WPA2 found", gSsid);
+		if (gNumNets == 0)
+			write_status("no-network", "No saved network yet: pick one in the Wi-Fi panel.");
+		else
+			write_status("no-network", "None of the saved networks is in range.");
+		say("no access point of a saved network (WPA2) found");
 		return -1;
 	}
+	/* preferred network first, then strongest signal */
 	for (i = 0; i < ncand; i++) {
 		for (j = i + 1; j < ncand; j++) {
-			if (gAp[order[j]].rssi > gAp[order[i]].rssi) {
-				u8 t = order[i];
-				order[i] = order[j];
-				order[j] = t;
+			int pi = gPrefer[0] && strcmp(gNets[netof[i]].ssid, gPrefer) == 0;
+			int pj = gPrefer[0] && strcmp(gNets[netof[j]].ssid, gPrefer) == 0;
+
+			if ((pj && !pi) || (pi == pj && gAp[order[j]].rssi > gAp[order[i]].rssi)) {
+				u8 t = order[i], t2 = netof[i];
+				order[i] = order[j]; netof[i] = netof[j];
+				order[j] = t; netof[j] = t2;
 			}
 		}
 	}
 	for (i = 0; i < ncand; i++) {
 		ap_t* a = &gAp[order[i]];
+		net_t* nt = &gNets[netof[i]];
+
+		strcpy(gSsid, nt->ssid);
+		if (!nt->have_pmk) {
+			say("deriving the key for '%s' (PBKDF2, 4096 rounds)...", nt->ssid);
+			pbkdf2_sha1(nt->psk, (const u8*)nt->ssid, (int)strlen(nt->ssid), 4096, nt->pmk, 32);
+			nt->have_pmk = 1;
+		}
+		memcpy(gPmk, nt->pmk, 32);
 		mac_str(a->bssid, b);
-		say("trying %s on channel %d", b, a->chan);
+		say("trying '%s' %s on channel %d", nt->ssid, b, a->chan);
+		write_status("connecting", "");
 		memcpy(gBssid, a->bssid, 6);
 		if (associate(a) != 0)
 			continue;
-		if (do_handshake() != 0)
+		r = do_handshake();
+		if (r == -2)
+			wrongpw = 1;
+		if (r != 0)
 			continue;
+		gCurChan = a->chan;
+		gCurDbm = a->rssi - 112;
+		gPrefer[0] = '\0';
 		return 0;
+	}
+	{
+		char msg[160];
+
+		sprintf(msg, wrongpw ? "Could not connect to '%s': the password is probably wrong." : "Could not connect to '%s'.", gSsid);
+		write_status("failed", msg);
 	}
 	say("could not complete the WPA2 connection");
 	return -1;
 }
-
-
 
 int
 main(int argc, char** argv)
@@ -1656,10 +1886,7 @@ main(int argc, char** argv)
 		else if (strcmp(argv[i], "-t") == 0)
 			gSelfPing = 1;
 	}
-	if (!scanonly && read_config(CONF_PATH) != 0)
-		return 1;
-	if (scanonly)
-		read_config(CONF_PATH);
+	read_config(CONF_PATH);
 
 	gFd = open(IWI_DEVICE, O_RDWR);
 	if (gFd < 0) {
@@ -1678,16 +1905,27 @@ main(int argc, char** argv)
 		goto done;
 	}
 
-	say("deriving the key from your passphrase (PBKDF2, 4096 rounds)...");
-	pbkdf2_sha1(gPsk, (const u8*)gSsid, (int)strlen(gSsid), 4096, gPmk, 32);
-	say("key derived");
+	if (gBridge)
+		write_status("starting", "");
 
 	for (;;) {
+		gLinked = 0;
 		r = connect_once();
 		if (r != 0) {
 			if (!gBridge)
 				break;
-			snooze(4000000);
+			if (card_has_crashed()) {
+				say("the card's firmware has crashed: restarting the card");
+				report_card("crashed while not connected");
+				write_status("restarting", "The Wi-Fi card stopped answering; restarting it.");
+				while (card_start() != 0)
+					snooze(5000000);
+				continue;
+			}
+			if (wait_with_commands(4000)) {
+				read_config(CONF_PATH);
+				/* a command that arrived while we are not associated: scanning is safe, but start clean anyway */
+			}
 			continue;
 		}
 		if (gIdle) {
@@ -1699,10 +1937,28 @@ main(int argc, char** argv)
 			break;
 		}
 		r = bridge();
+		gLinked = 0;
+		if (r == -3) {
+			/* the panel changed the saved networks or asked for one: re-read them, then restart the card
+			   (scanning while still associated crashes the firmware) and reconnect */
+			read_config(CONF_PATH);
+			write_status("scanning", "");
+			while (card_start() != 0)
+				snooze(5000000);
+			continue;
+		}
+		if (r == -4) {
+			write_status("scanning", "");
+			while (card_start() != 0)
+				snooze(5000000);
+			continue;
+		}
 		say("link lost, reconnecting");
+		write_status("reconnecting", "");
 		snooze(2000000);
 		if (r == -2) {
 			/* the card died: full restart (firmware reload) */
+			write_status("restarting", "The Wi-Fi card stopped answering; restarting it.");
 			while (card_start() != 0)
 				snooze(5000000);
 		}

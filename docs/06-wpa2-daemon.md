@@ -17,8 +17,10 @@ Command line: `iwid [-b] [-r] [-v] [--scan] [-t] [-e] [-i] [-h]` — see [08-ins
 
 ## 1. Configuration
 
-`iwi.conf`: lines `ssid=...`, `psk=...` (8–63 characters; everything after `psk=` is the passphrase, spaces allowed),
-optional `fw=` and `gw=`. The passphrase is never printed to the log.
+`iwi.conf`: pairs of lines `ssid=...` / `psk=...` — each pair is one **saved network**, up to 8 (`psk` is 8–63 characters; everything after `psk=` is the
+passphrase, spaces allowed), optional `fw=` and `gw=`. The passphrase is never printed to the log. A missing or empty file is fine: the daemon still starts,
+scans, publishes the list, and waits for the [Wi-Fi panel](14-wifi-panel.md) to add a network. When several saved networks are in range the strongest wins,
+unless the panel asked for a particular one. The key (PMK) is derived per network, once, when it is first tried.
 
 ## 2. Card setup (`setup_card`) — firmware commands, in order
 

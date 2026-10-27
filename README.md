@@ -10,7 +10,8 @@ card, and ZETA has no WPA at all. This project fixes both:
   Ethernet device, `/dev/net/iwi/0`;
 * a userland **daemon** (`iwid`) that does everything the firmware does not: the **WPA2-PSK** four-way handshake,
   **CCMP (AES) encryption/decryption in software**, **DHCP**, default route and DNS, auto-reconnect and a firmware watchdog;
-* a boot script, so the machine simply has Wi-Fi after power-on.
+* a boot script, so the machine simply has Wi-Fi after power-on;
+* a small native **Wi-Fi panel** to see what is in range, pick a network and type its password.
 
 Written in an evening-to-night of reverse-engineering and debugging on a real Dell Inspiron 510m running ZETA 1.2.1 —
 see [docs/10-debugging-story.md](docs/10-debugging-story.md) for how it went (including the firmware crash that took the
@@ -36,7 +37,8 @@ Verified on real hardware: **Dell Inspiron 510m, Intel PRO/Wireless 2200BG (PCI 
 | ZETA reachable from other machines on the Wi-Fi (ping, SSH) | works |
 | Builds from a clean copy with ZETA's own gcc 2.95; `make test` passes on the machine itself | works |
 | Starts by itself at every boot (~30 s after power-on), restarts if it dies | works |
-| Firmware-crash watchdog (restarts the card automatically) | implemented, never needed yet |
+| Firmware-crash watchdog (restarts the card automatically) | works (caught a real crash during development, recovered by itself) |
+| **Wi-Fi panel** (see networks and signal, connect, save several networks, forget) and a Deskbar menu entry | works |
 | Reconnect after the access point drops us | implemented, **not** tested for real |
 | WPA (TKIP), WEP, open networks, 802.11a (2915ABG), ad-hoc, power save, roaming | **not supported** |
 | Other cards (4221 / 4223 / 4224), other ZETA versions, BeOS R5, Haiku | **untested** |
@@ -71,6 +73,9 @@ edit /boot/home/config/settings/iwi.conf        # ssid=...  psk=...
 
 # 6. once it works: start Wi-Fi at every boot
 sh scripts/install.sh --boot
+
+# 7. optional: the Wi-Fi panel (adds Deskbar > Software > Internet > Wi-Fi)
+make -C panel && sh scripts/install.sh --panel
 ```
 
 Full instructions, flags, logs and removal: [docs/08-install-and-usage.md](docs/08-install-and-usage.md).
@@ -99,6 +104,7 @@ type `yes`. Details: [docs/05-firmware.md](docs/05-firmware.md).
 | [11 Reference](docs/11-reference.md) | registers, structures, command and notification numbers, ioctls, packet layouts |
 | [12 Security notes](docs/12-security.md) | what is and is not protected |
 | [13 Roadmap](docs/13-roadmap.md) | what is missing and how to help |
+| [14 Wi-Fi panel](docs/14-wifi-panel.md) | the GUI: how it works, the status/scan/command files, the saved-networks file |
 | [Sample log](docs/sample-log.md) | what a healthy run looks like |
 
 ## Repository layout
@@ -109,7 +115,8 @@ src/include/iwi_ioctl.h   interface between driver and daemon
 src/daemon/iwid.c         the daemon: scan, join, WPA2, DHCP, bridge, watchdog
 src/daemon/wpa.c, wpa.h   SHA-1, HMAC, PBKDF2, PRF, AES-128, key unwrap, CCM (no external libraries)
 scripts/                  install.sh, get-firmware.sh, start-wifi.sh (boot starter)
-config/iwi.conf.example   configuration template
+config/iwi.conf.example   configuration template (several saved networks)
+panel/WifiPanel.cpp       the Wi-Fi panel (BeAPI); panel/wificonf.h + test_wificonf.c: tested config editing
 tests/test_wpa.c          crypto self-test against published vectors
 tests/ethtest.c           asks /dev/net/iwi/0 for its MAC address (checks the BONE face)
 docs/                     the documentation

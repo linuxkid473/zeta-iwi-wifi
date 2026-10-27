@@ -1,11 +1,16 @@
 # /boot/home/config/settings/iwi.conf  -  read by iwid
 # Copy this file there and edit it.  Keep it private: it holds your Wi-Fi password in plain text.
 #
-# The name of your network (case sensitive, must be a WPA2-PSK / CCMP network).
-ssid=YOUR_NETWORK_NAME
+# One saved network = an "ssid=" line followed directly by its "psk=" line.  Add as many pairs as you like (up to 8):
+# iwid joins the strongest one that is in range.  The Wi-Fi panel (panel/) edits these lines for you.
 #
-# The Wi-Fi password, 8 to 63 characters.  Everything after "psk=" to the end of the line is used (spaces allowed).
+# ssid: the name of the network (case sensitive, must be WPA2-PSK / AES).
+# psk:  the password, 8 to 63 characters; everything after "psk=" to the end of the line is used (spaces allowed).
+ssid=YOUR_NETWORK_NAME
 psk=YOUR_WIFI_PASSWORD
+#
+#ssid=A_SECOND_NETWORK
+#psk=ITS_PASSWORD
 #
 # Optional: where the Intel firmware file is (default /boot/home/ZetaWifi/iwi-bss)
 #fw=/boot/home/ZetaWifi/iwi-bss

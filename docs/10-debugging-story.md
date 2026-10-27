@@ -122,6 +122,22 @@ reproducible afterwards (5+ minutes clean, a real reboot clean). Because the cau
 the card → log registers and the firmware crash report → full card restart (firmware reload) and reconnect. It has not triggered since.
 If you reproduce it, the log lines `card has been silent` + `FIRMWARE ERROR LOG` are exactly what is needed for a bug report.
 
+## 10. Scanning while connected kills the firmware (found while building the panel)
+
+The Wi-Fi panel wanted a "Rescan" button, so the daemon learned to run a scan on request while connected. The first test froze the connection:
+the log showed `intr_seen 40001802` — **`INTR_FATAL_ERROR` again** — followed by the watchdog doing its job (10 s of silence → card restart → reconnect,
+all by itself). So the firmware does not survive a `SCAN` command while it is associated (the BSD drivers scan in that state with their `net80211`
+background-scan logic, but evidently with details this driver does not reproduce; the cause was not investigated further).
+
+The fix is operational, not clever: **a rescan is a deliberate card restart** (`IWI_IOC_UP` again, which takes about a second), then a normal scan, then
+reconnect — about 1.6 seconds offline in the test, no crash.
+
+Lesson relearned the hard way within the hour: the same rule applies to *every* path that scans while associated. The panel's "connect to this saved
+network" command first re-scanned without restarting the card, crashed the firmware, and — because only the *bridge* loop had the watchdog — left the
+daemon scanning a dead card forever ("none of the saved networks is in range"). Two fixes: such commands now restart the card first, and the "not
+connected" loop also checks the driver's fatal-error flag and restarts the card by itself. (This one was a bug of mine that interrupted a live session;
+the panel tests should have covered this path before the user was sitting on the connection.)
+
 ## Things that looked like driver bugs but were not
 
 * The Mac's USB Ethernet adapter disappearing (`en9` gone) — made the laptop look "dead" twice.

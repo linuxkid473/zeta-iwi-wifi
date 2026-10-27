@@ -81,6 +81,16 @@ This backs up `~/config/boot/UserBootscript` to `UserBootscript.bak-before-wifi`
 it exits. Wi-Fi is up about 30 seconds after power-on. To keep Ethernet as the primary connection, remove `-r` from
 `start-wifi.sh`.
 
+## 7. The Wi-Fi panel (optional)
+
+```sh
+make -C panel                    # builds panel/WifiPanel
+sh scripts/install.sh --panel    # copies it to /boot/home/ZetaWifi/ and links it into the Deskbar
+```
+The entry appears under **Deskbar → Software → Internet → Wi-Fi** (ZETA builds those menus from the folder
+`~/config/ZetaMenu/Software/Internet`, where every entry is a symlink to an application). How the panel works: [14](14-wifi-panel.md).
+Saved networks live in `iwi.conf` as repeated `ssid=` / `psk=` pairs; the panel edits them for you.
+
 ## Logs
 
 `/tmp/iwid.log` (cleared at boot). A healthy run is shown in [sample-log.md](sample-log.md). Every 60 seconds it prints
